@@ -185,6 +185,13 @@ struct Flash_bwd_params : public Flash_fwd_params {
 
     bool deterministic;
     index_t dq_accum_split_stride;
+
+    bool use_fp9_qkv = false;
+
+    const float* q_descale_ptr = nullptr; 
+    const float* k_descale_ptr = nullptr;
+    const float* v_descale_ptr = nullptr;
+    const float* o_descale_ptr = nullptr;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

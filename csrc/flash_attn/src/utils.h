@@ -357,6 +357,67 @@ __forceinline__ __device__ void copy(TiledCopy tiled_copy, Tensor<Engine0, Layou
     //     }
     // }
 }
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <bool Is_even_MN=true, bool Is_even_K=true,
+          bool Clear_OOB_MN=false, bool Clear_OOB_K=true,
+          typename TiledCopy,
+          typename Engine0, typename Layout0,   // S
+          typename Engine1, typename Layout1,   // D
+          typename Engine2, typename Layout2,   // identity_MN
+          typename Engine3, typename Layout3>   // predicate_K
+__forceinline__ __device__ void copy_dequant_fp8(
+    TiledCopy tiled_copy,
+    cute::Tensor<Engine0, Layout0> const &S,              // gmem tile (FP8)
+    cute::Tensor<Engine1, Layout1>       &D,              // smem tile (FP16/BF16)
+    cute::Tensor<Engine2, Layout2> const &identity_MN,
+    cute::Tensor<Engine3, Layout3> const &predicate_K,
+    const int max_MN = 0,
+    const float descale = 1.f)
+{
+    CUTE_STATIC_ASSERT_V(rank(S) == cute::Int<3>{});
+    CUTE_STATIC_ASSERT_V(rank(D) == cute::Int<3>{});
+    CUTE_STATIC_ASSERT_V(size<0>(S) == size<0>(D));  // MMA
+    CUTE_STATIC_ASSERT_V(size<1>(S) == size<1>(D));  // MMA_M
+    CUTE_STATIC_ASSERT_V(size<2>(S) == size<2>(D));  // MMA_K
+    static_assert(!(Clear_OOB_MN && !Clear_OOB_K), "Invalid Clear_OOB_* combination");
+
+    using SrcT = typename decltype(S(_,0,0))::value_type;
+    using DstT = typename decltype(D(_,0,0))::value_type;
+    static_assert(cutlass::sizeof_bits_v<SrcT> == 8, "Source must be FP8 (e4m3/e5m2)");
+
+    #pragma unroll
+    for (int m = 0; m < size<1>(S); ++m) {
+        if (Is_even_MN || get<0>(identity_MN(0, m, 0)) < max_MN) {
+            #pragma unroll
+            for (int k = 0; k < size<2>(S); ++k) {
+                if (Is_even_K || predicate_K(k)) {
+                    // 1) Load FP8 gmem tile into a register fragment
+                    auto frag_src = cute::make_fragment_like(S(_, m, k));
+                    // Using TiledCopy here is optional; if this ever causes template issues,
+                    // fallback to `cute::copy(S(_,m,k), frag_src);`
+                    cute::copy(tiled_copy, S(_, m, k), frag_src);
+
+                    // 2) Convert FP8 -> float -> *descale -> DstT (half/bf16) into a reg fragment
+                    auto frag_dst = cute::make_fragment_like(D(_, m, k));
+                    #pragma unroll
+                    for (int i = 0; i < cute::size(frag_dst); ++i) {
+                        float x = static_cast<float>(frag_src(i));                 // FP8 -> float
+                        x *= descale;                                              // dequant
+                        frag_dst(i) = cutlass::NumericConverter<DstT, float>{}(x); // float -> DstT
+                    }
+
+                    // 3) Store the converted fragment into smem tile
+                    cute::copy(frag_dst, D(_, m, k));
+                } else if (Clear_OOB_K) {
+                    cute::clear(D(_, m, k));
+                }
+            }
+        } else if (Clear_OOB_MN) {
+            cute::clear(D(_, m, _));
+        }
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 

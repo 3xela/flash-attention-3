@@ -228,6 +228,11 @@ void set_params_dgrad(Flash_bwd_params &params,
         params.dv_batch_stride = dv.stride(0);
     }
 
+    params.q_descale_ptr = q_descale.defined() ? q_descale.data_ptr<float>() : nullptr;
+    params.k_descale_ptr = k_descale.defined() ? k_descale.data_ptr<float>() : nullptr;
+    params.v_descale_ptr = v_descale.defined() ? v_descale.data_ptr<float>() : nullptr;
+    params.o_descale_ptr = o_descale.defined() ? o_descale.data_ptr<float>() : nullptr;
+
     params.dq_accum_ptr = dq_accum_d;
     params.dk_accum_ptr = dk_accum_d;
     params.dv_accum_ptr = dv_accum_d;
