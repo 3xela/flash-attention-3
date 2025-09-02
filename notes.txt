@@ -1,0 +1,96 @@
+📝 Step 2: FP8 Gradient Stores (dq, dk, dv)
+🎯 Goal
+
+Quantize gradients (dq, dk, dv) from FP32/FP16 accumulators into FP8 (E4M3/E5M2), and store as uint8.
+This halves write bandwidth and sets up full FP8 training.
+
+1. Extend Flash_bwd_params
+
+Add fields:
+```
+const float* scale_dq_ptr;
+const float* scale_dk_ptr;
+const float* scale_dv_ptr;
+```
+
+2. Implement copy_quant_fp8
+
+Mirror of copy_dequant_fp8.
+
+Pseudocode:
+
+```template <typename TiledCopy, typename Engine0, typename Layout0,
+          typename Engine1, typename Layout1,
+          typename Engine2, typename Layout2,
+          typename Engine3, typename Layout3>
+__forceinline__ __device__ void copy_quant_fp8(
+    TiledCopy tiled_copy,
+    Tensor<Engine0, Layout0> const &S,    // source: float (accum grads)
+    Tensor<Engine1, Layout1> &D,          // dest: uint8_t (FP8 gmem)
+    Tensor<Engine2, Layout2> const &identity_MN,
+    Tensor<Engine3, Layout3> const &predicate_K,
+    const float* scale,                   // scaling factor
+    const int max_MN=0) 
+{
+    #pragma unroll
+    for (int m = 0; m < size<1>(S); ++m) {
+        if (get<0>(identity_MN(0, m, 0)) < max_MN) {
+            #pragma unroll
+            for (int k = 0; k < size<2>(S); ++k) {
+                if (predicate_K(k)) {
+                    float val = static_cast<float>(S(_, m, k));
+                    float scaled = val * (*scale);
+                    uint8_t fp8 = float_to_fp8(scaled);  // E4M3/E5M2
+                    D(_, m, k) = fp8;
+                }
+            }
+        }
+    }
+}
+```
+
+3. Modify 1colblock
+
+Replace stores:
+
+dQ_accum → gDq
+
+dK_accum → gDk
+
+dV_accum → gDv
+
+Use copy_quant_fp8 instead of flash::copy, passing the correct scale_*_ptr from params.
+
+4. Update set_params_dgrad (C++ glue)
+
+In flash_api.cpp:
+```
+params.scale_dq_ptr = scale_dq.data_ptr<float>();
+params.scale_dk_ptr = scale_dk.data_ptr<float>();
+params.scale_dv_ptr = scale_dv.data_ptr<float>();
+```
+
+5. Python Interface
+
+Allocate FP8 grads + scales:
+```
+dq = torch.empty_like(q, dtype=torch.uint8, device="cuda")
+dk = torch.empty_like(k, dtype=torch.uint8, device="cuda")
+dv = torch.empty_like(v, dtype=torch.uint8, device="cuda")
+
+scale_dq = torch.ones((1,), dtype=torch.float32, device="cuda")
+scale_dk = torch.ones((1,), dtype=torch.float32, device="cuda")
+scale_dv = torch.ones((1,), dtype=torch.float32, device="cuda")
+```
+
+6. Testing Checklist:
+Run with small inputs (batch=1, seq=16, d=64).
+Confirm grads are finite, no NaNs/INFs.
+Compare against FP16 baseline by dequantizing:
+
+dq_fp16_ref = dq_fp8.float() * (1.0 / scale_dq)
+
+
+Test dropout on/off, causal on/off.
+Run large case (batch=8, seq=1024, d=128).
+Check Nsight Compute → memory writes ~½ vs FP16 version.
