@@ -12,6 +12,7 @@ from typing import List, Optional
 DTYPE_MAP = {
     "fp16": "cutlass::half_t",
     "bf16": "cutlass::bfloat16_t",
+    "fp8": "uint8_t"
 }
 
 SM = [80]  # Sm80 kernels support up to
@@ -37,7 +38,13 @@ void run_mha_bwd_<{DTYPE}, {HEAD_DIM}, {IS_CAUSAL}>(Flash_bwd_params &params, cu
     run_mha_bwd_hdim{HEAD_DIM}<{DTYPE}, {IS_CAUSAL}>(params, stream);
 }}
 """
+KERNEL_IMPL_TEMPLATE_BWD_FP8 = """#include "flash_bwd_launch_template.h"
 
+template<>
+void run_mha_bwd_fp8_<{HEAD_DIM}, {IS_CAUSAL}>(Flash_bwd_params &params, cudaStream_t stream) {{
+    run_mha_bwd_hdim{HEAD_DIM}_fp8<{IS_CAUSAL}>(params, stream);
+}}
+"""
 
 @dataclass
 class Kernel:
@@ -54,9 +61,14 @@ class Kernel:
                 DTYPE=DTYPE_MAP[self.dtype], HEAD_DIM=self.head_dim, IS_CAUSAL=self.is_causal
             )
         elif self.direction == "bwd":
-            return KERNEL_IMPL_TEMPLATE_BWD.format(
-                DTYPE=DTYPE_MAP[self.dtype], HEAD_DIM=self.head_dim, IS_CAUSAL=self.is_causal
-            )
+            if self.dtype == "fp8":
+                return KERNEL_IMPL_TEMPLATE_BWD_FP8.format(
+                    HEAD_DIM=self.head_dim, IS_CAUSAL=self.is_causal
+                )
+            else:
+                return KERNEL_IMPL_TEMPLATE_BWD.format(
+                    DTYPE=DTYPE_MAP[self.dtype], HEAD_DIM=self.head_dim, IS_CAUSAL=self.is_causal
+                )
         else:
             return KERNEL_IMPL_TEMPLATE_FWD_SPLIT.format(
                 DTYPE=DTYPE_MAP[self.dtype], HEAD_DIM=self.head_dim, IS_CAUSAL=self.is_causal
