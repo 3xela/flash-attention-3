@@ -192,6 +192,10 @@ struct Flash_bwd_params : public Flash_fwd_params {
     const float* k_descale_ptr = nullptr;
     const float* v_descale_ptr = nullptr;
     const float* o_descale_ptr = nullptr;
+
+    const float* q_scale_ptr = nullptr;
+    const float* k_scale_ptr = nullptr;
+    const float* v_scale_ptr = nullptr;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

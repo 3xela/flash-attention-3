@@ -384,7 +384,7 @@ __forceinline__ __device__ void copy_dequant_fp8(
 
     using SrcT = typename decltype(S(_,0,0))::value_type;
     using DstT = typename decltype(D(_,0,0))::value_type;
-    static_assert(cutlass::sizeof_bits_v<SrcT> == 8, "Source must be FP8 (e4m3/e5m2)");
+    static_assert(cutlass::sizeof_bits<SrcT>::value == 8, "Source must be FP8 (e4m3/e5m2)");
 
     #pragma unroll
     for (int m = 0; m < size<1>(S); ++m) {
@@ -421,22 +421,24 @@ __forceinline__ __device__ void copy_dequant_fp8(
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <bool Is_even_MN=true, bool Is_even_K=true,
-          bool Clear_OOB_MN=false, bool Clear_OOB_K=true,
-          typename TiledCopy,
-          typename EngineS, typename LayoutS,   // S: src grads (fp16/bf16/fp32)
-          typename EngineD, typename LayoutD,   // D: dst fp8/uint8
-          typename EngineI, typename LayoutI,   // identity_MN
-          typename EngineP, typename LayoutP>   // predicate_K
+template <
+    bool Is_even_MN = true, bool Is_even_K = true,
+    bool Clear_OOB_MN = false, bool Clear_OOB_K = true,
+    typename TiledCopy,
+    typename Engine0, typename Layout0,   // S (src; fp16/fp32 accum)
+    typename Engine1, typename Layout1,   // D (dst; uint8_t/FP8 in gmem)
+    typename Engine2, typename Layout2,   // identity_MN
+    typename Engine3, typename Layout3>   // predicate_K
 __forceinline__ __device__ void copy_quant_fp8(
     TiledCopy tiled_copy,
-    cute::Tensor<EngineS, LayoutS> const &S,
-    cute::Tensor<EngineD, LayoutD>       &D,
-    cute::Tensor<EngineI, LayoutI> const &identity_MN,
-    cute::Tensor<EngineP, LayoutP> const &predicate_K,
-    int   max_MN = 0,
-    float scale  = 1.f)  
-
+    cute::Tensor<Engine0, Layout0> const &S,
+    cute::Tensor<Engine1, Layout1>       &D,
+    cute::Tensor<Engine2, Layout2> const &identity_MN,
+    cute::Tensor<Engine3, Layout3> const &predicate_K,
+    int max_MN = 0,
+    const float* scale = nullptr,          // per-tensor scale; if null treat as 1.0f
+    bool use_e4m3 = true                   // true: E4M3, false: E5M2
+) {
     CUTE_STATIC_ASSERT_V(rank(S) == cute::Int<3>{});
     CUTE_STATIC_ASSERT_V(rank(D) == cute::Int<3>{});
     CUTE_STATIC_ASSERT_V(size<0>(S) == size<0>(D));
@@ -446,9 +448,14 @@ __forceinline__ __device__ void copy_quant_fp8(
 
     using SrcT = typename decltype(S(_,0,0))::value_type;
     using DstT = typename decltype(D(_,0,0))::value_type;
-    static_assert(cutlass::sizeof_bits_v<DstT> == 8,  "Dest must be 8-bit (fp8/uint8)");
-    static_assert(cutlass::sizeof_bits_v<SrcT> == 16 || cutlass::sizeof_bits_v<SrcT> == 32,
-                  "Source must be fp16/bf16 or fp32");
+
+    // Accept f16 or f32 src; require 8-bit dst
+    static_assert(cutlass::sizeof_bits<SrcT>::value == 16 || cutlass::sizeof_bits<SrcT>::value == 32,
+                  "Source must be f16 or f32");
+    static_assert(cutlass::sizeof_bits<DstT>::value == 8,
+                  "Destination must be 8-bit (uint8/FP8 storage)");
+
+    const float s = (scale ? *scale : 1.0f);
 
     #pragma unroll
     for (int m = 0; m < size<1>(S); ++m) {
@@ -456,29 +463,27 @@ __forceinline__ __device__ void copy_quant_fp8(
             #pragma unroll
             for (int k = 0; k < size<2>(S); ++k) {
                 if (Is_even_K || predicate_K(k)) {
-                    // Load source tile into a register fragment
-                    auto frag_src = cute::make_fragment_like(S(_, m, k));
-                    // Some TiledCopy variants require plain cute::copy; either is fine for MVP
-                    // cute::copy(tiled_copy, S(_, m, k), frag_src);
-                    cute::copy(S(_, m, k), frag_src);
-
-                    // Quantize each lane to fp8
+                    // Create a destination fragment matching the tile
                     auto frag_dst = cute::make_fragment_like(D(_, m, k));
-                    #pragma unroll
-                    for (int i = 0; i < cute::size(frag_dst); ++i) {
-                        float x = cutlass::NumericConverter<float, SrcT>{}(frag_src(i));
-                        x *= scale;
+                    auto frag_src = S(_, m, k);
 
-                        // use E4M3
-                        // TODO figure out if its better to use E5M2 
-                        // Convert float->fp8 type, then extract its raw byte.
-                        cutlass::float_e4m3_t q = cutlass::NumericConverter<cutlass::float_e4m3_t, float>{}(x);
-                        // Preferred: q.raw() gives the underlying uint8_t
-                        uint8_t byte = q.raw();
-                        frag_dst(i) = cutlass::NumericConverter<DstT, uint8_t>{}(byte);
+                    #pragma unroll
+                    for (int i = 0; i < size(frag_src); ++i) {
+                        float x = static_cast<float>(frag_src(i)) * s;
+
+                        // Quantize to FP8 raw byte
+                        uint8_t raw;
+                        if (use_e4m3) {
+                            cutlass::float_e4m3_t q = cutlass::NumericConverter<cutlass::float_e4m3_t, float>{}(x);
+                            raw = q.raw();
+                        } else {
+                            cutlass::float_e5m2_t q = cutlass::NumericConverter<cutlass::float_e5m2_t, float>{}(x);
+                            raw = q.raw();
+                        }
+                        // Store raw byte into 8-bit destination
+                        frag_dst(i) = cutlass::NumericConverter<DstT, uint8_t>{}(raw);
                     }
 
-                    // Store the quantized fragment to destination tile
                     cute::copy(frag_dst, D(_, m, k));
                 } else if (Clear_OOB_K) {
                     cute::clear(D(_, m, k));
@@ -489,6 +494,7 @@ __forceinline__ __device__ void copy_quant_fp8(
         }
     }
 }
+
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

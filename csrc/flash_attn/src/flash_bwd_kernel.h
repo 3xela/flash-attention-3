@@ -798,7 +798,7 @@ inline __device__ void compute_dq_dk_dv_1colblock_fp8(const Params &params, cons
     using Element = typename Kernel_traits::Element;
     using ElementAccum = typename Kernel_traits::ElementAccum;
     using index_t = typename Kernel_traits::index_t;
-    using ElementQKV = typename cutlass::float_e4m3_t // for forward activations
+    using ElementQKV = typename cutlass::float_e4m3_t; // for forward activations
 
     // Shared memory.
     extern __shared__ char smem_[];
@@ -809,6 +809,10 @@ inline __device__ void compute_dq_dk_dv_1colblock_fp8(const Params &params, cons
     const float descale_q = params.q_descale_ptr ? params.q_descale_ptr[q_head]  : 1.0f;
     const float descale_k = params.k_descale_ptr ? params.k_descale_ptr[kv_head] : 1.0f;
     const float descale_v = params.v_descale_ptr ? params.v_descale_ptr[kv_head] : 1.0f;
+
+    float scale_dq = params.q_scale_ptr ? *params.q_scale_ptr : 1.f;
+    float scale_dk = params.k_scale_ptr ? *params.k_scale_ptr : 1.f;
+    float scale_dv = params.v_scale_ptr ? *params.v_scale_ptr : 1.f;
     // The thread index.
     const int tidx = threadIdx.x;
 
@@ -1557,14 +1561,14 @@ inline __device__ void compute_dq_dk_dv_fp8(const Params &params) {
 
     const int n_block_max = (params.seqlen_k + Kernel_traits::kBlockN - 1) / Kernel_traits::kBlockN;
     if (n_block_max == 1) {
-        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, true, true>(params, bidb, bidh, 0);
+        compute_dq_dk_dv_1colblock_fp8<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, true, true>(params, bidb, bidh, 0);
     } else {
         // Iterating backward from n_block_max - 1 to 0 might save 1 register
-        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, true, false>(params, bidb, bidh, n_block_max - 1);
+        compute_dq_dk_dv_1colblock_fp8<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, true, false>(params, bidb, bidh, n_block_max - 1);
         for (int n_block = n_block_max - 2; n_block > 0; n_block--) {
-            compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, false, false>(params, bidb, bidh, n_block);
+            compute_dq_dk_dv_1colblock_fp8<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, false, false>(params, bidb, bidh, n_block);
         }
-        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, false, true>(params, bidb, bidh, 0);
+        compute_dq_dk_dv_1colblock_fp8<Kernel_traits, Is_dropout, Is_causal, Has_alibi, Is_even_M, Is_even_K, false, true>(params, bidb, bidh, 0);
     }
 }
 
@@ -1596,7 +1600,7 @@ inline __device__ void compute_dq_dk_dv_seqk_parallel_fp8(const Params &params) 
 
     // If deterministic, each thread block will do atomicAdd to a different dQ_accum buffer.
     for (int n_block = blockIdx.x; n_block < (params.seqlen_k + Kernel_traits::kBlockN - 1) / Kernel_traits::kBlockN; n_block += gridDim.x) {
-        compute_dq_dk_dv_1colblock<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi, Is_even_MN, Is_even_K, Is_softcap, false, false, /*Seq_parallel=*/true>(params, bidb, bidh, n_block);
+        compute_dq_dk_dv_1colblock_fp8<Kernel_traits, Is_dropout, Is_causal, Is_local, Has_alibi, Is_even_MN, Is_even_K, Is_softcap, false, false, /*Seq_parallel=*/true>(params, bidb, bidh, n_block);
     }
 }
 

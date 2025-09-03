@@ -186,7 +186,14 @@ void set_params_dgrad(Flash_bwd_params &params,
                       int window_size_right,
                       const float softcap,
                       bool deterministic,
-                      const bool unpadded_lse) {
+                      const bool unpadded_lse,
+                      c10::optional<at::Tensor> q_tensor_descale = c10::nullopt,
+                      c10::optional<at::Tensor> k_tensor_descale = c10::nullopt,
+                      c10::optional<at::Tensor> v_tensor_descale = c10::nullopt,
+                      c10::optional<at::Tensor> o_tensor_descale = c10::nullopt,
+                      c10::optional<at::Tensor> q_tensor_scale   = c10::nullopt,
+                      c10::optional<at::Tensor> k_tensor_scale   = c10::nullopt,
+                      c10::optional<at::Tensor> v_tensor_scale   = c10::nullopt) {
 
     set_params_fprop(params,
                      b, seqlen_q, seqlen_k, seqlen_q_rounded, seqlen_k_rounded, h, h_k, d, d_rounded,
@@ -225,15 +232,15 @@ void set_params_dgrad(Flash_bwd_params &params,
         params.dv_batch_stride = dv.stride(0);
     }
 
-    params.q_descale_ptr = q_descale.defined() ? q_descale.data_ptr<float>() : nullptr;
-    params.k_descale_ptr = k_descale.defined() ? k_descale.data_ptr<float>() : nullptr;
-    params.v_descale_ptr = v_descale.defined() ? v_descale.data_ptr<float>() : nullptr;
-    params.o_descale_ptr = o_descale.defined() ? o_descale.data_ptr<float>() : nullptr;
-
-    params.q_scale_ptr = q_scale.defined() ? q_scale.data_ptr<float>() : nullptr;
-    params.k_scale_ptr = k_scale.defined() ? k_scale.data_ptr<float>() : nullptr;
-    params.v_scale_ptr = v_scale.defined() ? v_scale.data_ptr<float>() : nullptr;
-
+    params.q_descale_ptr = q_tensor_descale.has_value() ? q_tensor_descale->data_ptr<float>() : nullptr;
+    params.k_descale_ptr = k_tensor_descale.has_value() ? k_tensor_descale->data_ptr<float>() : nullptr;
+    params.v_descale_ptr = v_tensor_descale.has_value() ? v_tensor_descale->data_ptr<float>() : nullptr;
+    params.o_descale_ptr = o_tensor_descale.has_value() ? o_tensor_descale->data_ptr<float>() : nullptr;
+    
+    params.q_scale_ptr = q_tensor_scale.has_value() ? q_tensor_scale->data_ptr<float>() : nullptr;
+    params.k_scale_ptr = k_tensor_scale.has_value() ? k_tensor_scale->data_ptr<float>() : nullptr;
+    params.v_scale_ptr = v_tensor_scale.has_value() ? v_tensor_scale->data_ptr<float>() : nullptr;
+    
     params.dq_accum_ptr = dq_accum_d;
     params.dk_accum_ptr = dk_accum_d;
     params.dv_accum_ptr = dv_accum_d;
@@ -784,26 +791,36 @@ void run_mha_bwd(Flash_bwd_params &params, cudaStream_t stream) {
     });
 }
 
-std::vector<at::Tensor>
-mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x multiple_of(head_size_og, 8)
-        const at::Tensor &q,   // batch_size x seqlen_q x num_heads x head_size
-        const at::Tensor &k,   // batch_size x seqlen_k x num_heads_k x head_size
-        const at::Tensor &v,   // batch_size x seqlen_k x num_heads_k x head_size
-        const at::Tensor &out,   // batch_size x seqlen_q x num_heads x head_size
-        const at::Tensor &softmax_lse,     // b x h x seqlen_q
-        c10::optional<at::Tensor> &dq_,   // batch_size x seqlen_q x num_heads x head_size
-        c10::optional<at::Tensor> &dk_,   // batch_size x seqlen_k x num_heads_k x head_size
-        c10::optional<at::Tensor> &dv_,   // batch_size x seqlen_k x num_heads_k x head_size
-        c10::optional<at::Tensor> &alibi_slopes_, // num_heads or batch_size x num_heads
-        const float p_dropout,         // probability to drop
-        const float softmax_scale,
-        const bool is_causal,
-        int window_size_left,
-        int window_size_right,
-        const float softcap,
-        const bool deterministic,
-        c10::optional<at::Generator> gen_,
-        c10::optional<at::Tensor> &rng_state) {
+std::vector<at::Tensor> mha_bwd(
+    const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x multiple_of(head_size_og, 8)
+    const at::Tensor &q,     // batch_size x seqlen_q x num_heads x head_size
+    const at::Tensor &k,     // batch_size x seqlen_k x num_heads_k x head_size
+    const at::Tensor &v,     // batch_size x seqlen_k x num_heads_k x head_size
+    const at::Tensor &out,   // batch_size x seqlen_q x num_heads x head_size
+    const at::Tensor &softmax_lse, // b x h x seqlen_q
+    c10::optional<at::Tensor> &dq_,
+    c10::optional<at::Tensor> &dk_,
+    c10::optional<at::Tensor> &dv_,
+    c10::optional<at::Tensor> &alibi_slopes_,
+    const float p_dropout,
+    const float softmax_scale,
+    const bool is_causal,
+    int window_size_left,
+    int window_size_right,
+    const float softcap,
+    const bool deterministic,
+    c10::optional<at::Generator> gen_,
+    c10::optional<at::Tensor> &rng_state,
+
+    // 🔽 NEW OPTIONAL SCALE/DESCALE TENSORS
+    c10::optional<at::Tensor> &q_tensor_descale,
+    c10::optional<at::Tensor> &k_tensor_descale,
+    c10::optional<at::Tensor> &v_tensor_descale,
+    c10::optional<at::Tensor> &o_tensor_descale,
+    c10::optional<at::Tensor> &q_tensor_scale,
+    c10::optional<at::Tensor> &k_tensor_scale,
+    c10::optional<at::Tensor> &v_tensor_scale
+){
 
     #ifdef FLASHATTENTION_DISABLE_BACKWARD
         TORCH_CHECK(false, "This flash attention build does not support backward.");
@@ -959,7 +976,9 @@ mha_bwd(const at::Tensor &dout,  // batch_size x seqlen_q x num_heads, x multipl
                      window_size_right,
                      softcap,
                      deterministic,
-                     /*unpadded_lse*/false);
+                     /*unpadded_lse*/false,
+                     q_tensor_descale, k_tensor_descale, v_tensor_descale, o_tensor_descale,
+                     q_tensor_scale, k_tensor_scale, v_tensor_scale );
     params.dq_accum_split_stride = !deterministic ? 0 : dq_accum.stride(0);
 
     auto launch = &run_mha_bwd;
@@ -1025,7 +1044,16 @@ mha_varlen_bwd(const at::Tensor &dout,  // total_q x num_heads, x head_size
                const float softcap,
                const bool deterministic,
                c10::optional<at::Generator> gen_,
-               c10::optional<at::Tensor> &rng_state) {
+               c10::optional<at::Tensor> &rng_state,
+               
+               c10::optional<at::Tensor>& q_tensor_descale,
+               c10::optional<at::Tensor>& k_tensor_descale,
+               c10::optional<at::Tensor>& v_tensor_descale,
+               c10::optional<at::Tensor>& o_tensor_descale,
+               c10::optional<at::Tensor>& q_tensor_scale,
+               c10::optional<at::Tensor>& k_tensor_scale,
+               c10::optional<at::Tensor>& v_tensor_scale
+            ) {
 
     #ifdef FLASHATTENTION_DISABLE_BACKWARD
         TORCH_CHECK(false, "This flash attention build does not support backward.");
@@ -1198,7 +1226,9 @@ mha_varlen_bwd(const at::Tensor &dout,  // total_q x num_heads, x head_size
                      window_size_right,
                      softcap,
                      deterministic,
-                     /*unpadded_lse*/true);
+                     /*unpadded_lse*/true,
+                     q_tensor_descale, k_tensor_descale, v_tensor_descale, o_tensor_descale,
+                     q_tensor_scale, k_tensor_scale, v_tensor_scale);
     params.dq_accum_split_stride = !deterministic ? 0 : dq_accum.stride(0);
     params.total_q = total_q;
 
@@ -1528,7 +1558,36 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.doc() = "FlashAttention";
     m.def("fwd", &mha_fwd, "Forward pass");
     m.def("varlen_fwd", &mha_varlen_fwd, "Forward pass (variable length)");
-    m.def("bwd", &mha_bwd, "Backward pass");
+    m.def("bwd", &mha_bwd,
+        py::arg("dout"),
+        py::arg("q"),
+        py::arg("k"),
+        py::arg("v"),
+        py::arg("out"),
+        py::arg("softmax_lse"),
+        py::arg("dq") = py::none(),
+        py::arg("dk") = py::none(),
+        py::arg("dv") = py::none(),
+        py::arg("alibi_slopes") = py::none(),
+        py::arg("p_dropout"),
+        py::arg("softmax_scale"),
+        py::arg("is_causal"),
+        py::arg("window_size_left"),
+        py::arg("window_size_right"),
+        py::arg("softcap"),
+        py::arg("deterministic"),
+        py::arg("gen") = py::none(),
+        py::arg("rng_state") = py::none(),
+    
+        // 🔽 NEW ONES
+        py::arg("q_tensor_descale") = py::none(),
+        py::arg("k_tensor_descale") = py::none(),
+        py::arg("v_tensor_descale") = py::none(),
+        py::arg("o_tensor_descale") = py::none(),
+        py::arg("q_tensor_scale")   = py::none(),
+        py::arg("k_tensor_scale")   = py::none(),
+        py::arg("v_tensor_scale")   = py::none()
+    );   
     m.def("varlen_bwd", &mha_varlen_bwd, "Backward pass (variable length)");
     m.def("fwd_kvcache", &mha_fwd_kvcache, "Forward pass, with KV-cache");
 }
