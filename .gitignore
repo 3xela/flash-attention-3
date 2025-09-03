@@ -27,3 +27,5 @@ var/
 # Dev
 venv
 .venv
+
+setup.sh
