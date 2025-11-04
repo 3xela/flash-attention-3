@@ -41,10 +41,19 @@ void run_mha_bwd_<{DTYPE}, {HEAD_DIM}, {IS_CAUSAL}>(Flash_bwd_params &params, cu
 KERNEL_IMPL_TEMPLATE_BWD_FP8 = """#include "flash_bwd_launch_template.h"
 
 template<>
-void run_mha_bwd_fp8_<{HEAD_DIM}, {IS_CAUSAL}>(Flash_bwd_params &params, cudaStream_t stream) {{
-    run_mha_bwd_hdim{HEAD_DIM}_fp8<{IS_CAUSAL}>(params, stream);
+void run_mha_bwd_fp8_<cutlass::half_t, {HEAD_DIM}, {IS_CAUSAL}>(
+    Flash_bwd_params &params, cudaStream_t stream) {{
+    run_mha_bwd_hdim{HEAD_DIM}_fp8<cutlass::half_t, {IS_CAUSAL}>(params, stream);
+}}
+
+template<>
+void run_mha_bwd_fp8_<cutlass::bfloat16_t, {HEAD_DIM}, {IS_CAUSAL}>(
+    Flash_bwd_params &params, cudaStream_t stream) {{
+    run_mha_bwd_hdim{HEAD_DIM}_fp8<cutlass::bfloat16_t, {IS_CAUSAL}>(params, stream);
 }}
 """
+
+
 
 @dataclass
 class Kernel:

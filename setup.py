@@ -1,6 +1,7 @@
 # Copyright (c) 2023, Tri Dao.
 
 import sys
+import glob
 import warnings
 import os
 import re
@@ -179,10 +180,8 @@ if not SKIP_CUDA_BUILD and not IS_ROCM:
     # https://github.com/pytorch/pytorch/blob/8472c24e3b5b60150096486616d98b7bea01500b/torch/utils/cpp_extension.py#L920
     if FORCE_CXX11_ABI:
         torch._C._GLIBCXX_USE_CXX11_ABI = True
-    ext_modules.append(
-        CUDAExtension(
-            name="flash_attn_2_cuda",
-            sources=[
+
+    kernel_sources = [
                 "csrc/flash_attn/flash_api.cpp",
                 "csrc/flash_attn/src/flash_fwd_hdim32_fp16_sm80.cu",
                 "csrc/flash_attn/src/flash_fwd_hdim32_bf16_sm80.cu",
@@ -268,7 +267,11 @@ if not SKIP_CUDA_BUILD and not IS_ROCM:
                 "csrc/flash_attn/src/flash_fwd_split_hdim192_bf16_causal_sm80.cu",
                 "csrc/flash_attn/src/flash_fwd_split_hdim256_fp16_causal_sm80.cu",
                 "csrc/flash_attn/src/flash_fwd_split_hdim256_bf16_causal_sm80.cu",
-            ],
+            ] + [f for f in glob.glob("csrc/flash_attn/src/*fp8*_sm80.cu") if "fwd" not in f]
+    ext_modules.append(
+        CUDAExtension(
+            name="flash_attn_2_cuda",
+            sources= kernel_sources,
             extra_compile_args={
                 "cxx": ["-O3", "-std=c++17"] + generator_flag,
                 "nvcc": append_nvcc_threads(

@@ -5,6 +5,13 @@
 #include "flash_bwd_launch_template.h"
 
 template<>
-void run_mha_bwd_fp8_<192, true>(Flash_bwd_params &params, cudaStream_t stream) {
-    run_mha_bwd_hdim192_fp8<true>(params, stream);
+void run_mha_bwd_fp8_<cutlass::half_t, 192, true>(
+    Flash_bwd_params &params, cudaStream_t stream) {
+    run_mha_bwd_hdim192_fp8<cutlass::half_t, true>(params, stream);
+}
+
+template<>
+void run_mha_bwd_fp8_<cutlass::bfloat16_t, 192, true>(
+    Flash_bwd_params &params, cudaStream_t stream) {
+    run_mha_bwd_hdim192_fp8<cutlass::bfloat16_t, true>(params, stream);
 }

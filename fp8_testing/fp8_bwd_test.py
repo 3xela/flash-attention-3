@@ -1,6 +1,6 @@
 import torch
 import pytest
-import flash_attn_2_cuda as fa
+import flash_attn as fa
 
 
 def quantize_to_fp8(x: torch.Tensor, fp8_dtype=torch.float8_e4m3fn):
