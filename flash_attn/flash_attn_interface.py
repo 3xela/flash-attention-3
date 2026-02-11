@@ -231,6 +231,75 @@ if torch.__version__ >= "2.4.0":
 else:
     _wrapped_flash_attn_varlen_forward = _flash_attn_varlen_forward
 
+@_torch_custom_op_wrapper("flash_attn::_flash_attn_backward_fp8", mutates_args=("dq", "dk", "dv"), device_types="cuda")
+def _flash_attn_backward_fp8(
+    dout: torch.Tensor,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    out: torch.Tensor,
+    softmax_lse: torch.Tensor,
+    dq: Optional[torch.Tensor],
+    dk: Optional[torch.Tensor],
+    dv: Optional[torch.Tensor],
+    dropout_p: float,
+    softmax_scale: float,
+    causal: bool,
+    window_size_left: int,
+    window_size_right: int,
+    softcap: float,
+    alibi_slopes: Optional[torch.Tensor],
+    deterministic: bool,
+    rng_state: Optional[torch.Tensor] = None,
+    q_tensor_descale : Optional[torch.Tensor] = None,
+    k_tensor_descale : Optional[torch.Tensor] = None,
+    v_tensor_descale : Optional[torch.Tensor] = None,
+    o_tensor_descale : Optional[torch.Tensor] = None,
+    q_tensor_scale : Optional[torch.Tensor] = None,
+    k_tensor_scale : Optional[torch.Tensor] = None,
+    v_tensor_scale : Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    # dq, dk, dv are allocated by us so they should already be contiguous
+    dout, q, k, v, out = [maybe_contiguous(x) for x in (dout, q, k, v, out)]
+    (
+        dq,
+        dk,
+        dv,
+        softmax_d,
+    ) = flash_attn_cuda.bwd_fp8(
+        dout,
+        q,
+        k,
+        v,
+        out,
+        softmax_lse,
+        dq,
+        dk,
+        dv,
+        alibi_slopes,
+        dropout_p,
+        softmax_scale,
+        causal,
+        window_size_left,
+        window_size_right,
+        softcap,
+        deterministic,
+        None,
+        rng_state,
+        q_tensor_descale,
+        k_tensor_descale,
+        v_tensor_descale,
+        o_tensor_descale,
+        q_tensor_scale,
+        k_tensor_scale,
+        v_tensor_scale,
+    )
+    return softmax_d
+
+if torch.__version__ >= "2.4.0":                                                                                                                                                                                        
+    _wrapped_flash_attn_backward_fp8 = torch.ops.flash_attn._flash_attn_backward_fp8                                                                                                                                    
+else:                                                                     
+    _wrapped_flash_attn_backward_fp8 = _flash_attn_backward_fp8 
 
 @_torch_custom_op_wrapper("flash_attn::_flash_attn_backward", mutates_args=("dq", "dk", "dv"), device_types="cuda")
 def _flash_attn_backward(
@@ -1567,3 +1636,46 @@ def flash_attn_with_kvcache(
         num_splits,
     )
     return (out, softmax_lse) if return_softmax_lse else out
+
+
+def flash_attn_backward_fp8(                                                                                                                                                                                            
+      dout,                                                                                                                                                                                                               
+      q, k, v,                                                                                                                                                                                                            
+      out,                                                                                                                                                                                                                
+      softmax_lse,
+      dq=None, dk=None, dv=None,
+      dropout_p=0.0,
+      softmax_scale=None,
+      causal=False,
+      window_size=(-1, -1),
+      softcap=0.0,
+      alibi_slopes=None,
+      deterministic=False,
+      rng_state=None,
+      q_descale=None, k_descale=None, v_descale=None, o_descale=None,
+      q_scale=None, k_scale=None, v_scale=None,
+  ):
+      if softmax_scale is None:
+          softmax_scale = q.shape[-1] ** (-0.5)
+      if dq is None:
+          dq = torch.empty_like(q)
+      if dk is None:
+          dk = torch.empty_like(k)
+      if dv is None:
+          dv = torch.empty_like(v)
+      _wrapped_flash_attn_backward_fp8(
+          dout, q, k, v, out, softmax_lse,
+          dq, dk, dv,
+          dropout_p, softmax_scale, causal,
+          window_size[0], window_size[1],
+          softcap, alibi_slopes, deterministic,
+          rng_state=rng_state,
+          q_tensor_descale=q_descale,
+          k_tensor_descale=k_descale,
+          v_tensor_descale=v_descale,
+          o_tensor_descale=o_descale,
+          q_tensor_scale=q_scale,
+          k_tensor_scale=k_scale,
+          v_tensor_scale=v_scale,
+      )
+      return dq, dk, dv

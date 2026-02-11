@@ -102,22 +102,20 @@ def test_flash_attn_fp8_bwd(seqlen, d, dropout_p, causal, dtype):
     dk = torch.zeros_like(k)
     dv = torch.zeros_like(v)
 
-    fa.bwd_fp8(
-        g,
-        q_fp8, k_fp8, v_fp8,
-        out_fp8,
-        torch.empty(batch_size, nheads, seqlen, device=device, dtype=dtype),
-        dq, dk, dv,
-        None,
-        dropout_p, softmax_scale, causal,
-        -1, -1, 0.0, False, None, None,
-        torch.tensor([q_descale], device=device),
-        torch.tensor([k_descale], device=device),
-        torch.tensor([v_descale], device=device),
-        o_descale,
-        torch.tensor([q_scale], device=device),
-        torch.tensor([k_scale], device=device),
-        torch.tensor([v_scale], device=device),
+    fa.flash_attn_backward_fp8(                                                                                                                                                                                             
+        g, q_fp8, k_fp8, v_fp8, out_fp8,                                                                                                                                                                                    
+        softmax_lse=torch.empty(batch_size, nheads, seqlen, device=device, dtype=dtype),                                                                                                                                    
+        dq=dq, dk=dk, dv=dv,                                                                                                                                                                                                
+        dropout_p=dropout_p,                                                                                                                                                                                                
+        softmax_scale=softmax_scale,
+        causal=causal,
+        q_descale=torch.tensor([q_descale], device=device),
+        k_descale=torch.tensor([k_descale], device=device),
+        v_descale=torch.tensor([v_descale], device=device),
+        o_descale=torch.tensor([1.0], device=device),
+        q_scale=torch.tensor([q_scale], device=device),
+        k_scale=torch.tensor([k_scale], device=device),
+        v_scale=torch.tensor([v_scale], device=device),
     )
 
     print(f"dQ max diff: {(dq - dq_ref).abs().max().item()}")
