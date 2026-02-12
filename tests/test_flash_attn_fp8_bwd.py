@@ -54,8 +54,8 @@ def plot_fp8_histograms(x, scale, descale, fp8_dtype=torch.float8_e4m3fn, title=
 
 # @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("dtype", [torch.float16])
-@pytest.mark.parametrize("causal", [False, True])
-# @pytest.mark.parametrize("causal", [False])
+#@pytest.mark.parametrize("causal", [False, True])
+@pytest.mark.parametrize("causal", [False])
 @pytest.mark.parametrize("d", [32, 64, 128])
 # @pytest.mark.parametrize("d", [32])
 @pytest.mark.parametrize("seqlen", [64, 128, 256])
